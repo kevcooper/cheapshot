@@ -23,11 +23,15 @@ def calls(tmp_path, monkeypatch):
         recorded.append((model, prompt, system, effort, output_schema))
         await asyncio.sleep(0.05)
         if output_schema is not None:
-            return json.dumps({"n": len(recorded)}), model
-        return f"answer #{len(recorded)}", model
+            return json.dumps({"n": len(recorded)}), model, fake_response(len(recorded))
+        return f"answer #{len(recorded)}", model, fake_response(len(recorded))
 
     monkeypatch.setattr(server, "infer", fake_infer)
     return recorded
+
+
+def fake_response(n):
+    return {"result": f"answer #{n}", "usage": {"output_tokens": 10 * n}, "total_cost_usd": 0.01}
 
 
 SCHEMA = {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"], "additionalProperties": False}
@@ -146,7 +150,7 @@ def test_takes_over_when_other_session_fails(calls, tmp_path):
 def test_claim_from_dead_process_is_ignored(calls, tmp_path):
     dead = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
     other = other_session(tmp_path)
-    other._db.execute("INSERT INTO pending VALUES (?, 'x', ?, ?)", (key_for("hi"), int(dead.stdout), time.time()))
+    other._db.execute("INSERT INTO pending (key, token, pid, started_at) VALUES (?, 'x', ?, ?)", (key_for("hi"), int(dead.stdout), time.time()))
     other._db.commit()
     assert run(prompt="hi").cached is False
 
@@ -161,7 +165,7 @@ def test_concurrency_is_capped(calls, monkeypatch):
         peak = max(peak, running)
         await asyncio.sleep(0.05)
         running -= 1
-        return "ok", "m"
+        return "ok", "m", {}
 
     monkeypatch.setattr(server, "infer", tracked)
     asyncio.run(gather(*({"prompt": str(i)} for i in range(6))))
@@ -208,3 +212,90 @@ def test_file_size_cap(calls, tmp_path, monkeypatch):
     doc.write_text("x" * 11)
     with pytest.raises(server.ToolError, match="exceed 10 bytes"):
         run(prompt="summarize", files=[str(doc)])
+
+
+def row(key, *columns):
+    return server.get_cache()._db.execute(
+        f"SELECT {', '.join(columns)} FROM results WHERE key = ?", (key,)
+    ).fetchone()
+
+
+def test_hits_are_counted_including_waiters(calls):
+    first = run(prompt="hi")
+    assert row(first.cache_key, "hits", "last_hit_at") == (0, None)
+    run(prompt="hi")
+    asyncio.run(gather({"prompt": "hi"}, {"prompt": "hi"}))
+    assert row(first.cache_key, "hits")[0] == 3
+
+
+def test_refresh_keeps_hit_count(calls):
+    first = run(prompt="hi")
+    run(prompt="hi")
+    run(prompt="hi", refresh=True)
+    assert row(first.cache_key, "hits")[0] == 1
+
+
+def test_raw_response_is_stored_without_the_answer(calls):
+    first = run(prompt="hi")
+    stored = json.loads(row(first.cache_key, "response")[0])
+    assert stored == {"usage": {"output_tokens": 10}, "total_cost_usd": 0.01}
+
+
+def test_waiters_get_the_claimants_error(calls, tmp_path):
+    other = other_session(tmp_path)
+    token = other.claim(key_for("hi"))
+
+    async def scenario():
+        task = asyncio.create_task(server.oneshot(prompt="hi"))
+        await asyncio.sleep(0.05)
+        other.release(key_for("hi"), token, error="Request was refused")
+        return await task
+
+    with pytest.raises(server.ToolError, match="Request was refused .from a concurrent"):
+        asyncio.run(scenario())
+    assert calls == []
+
+
+def test_concurrent_identical_failures_run_once(calls, monkeypatch):
+    attempts = []
+
+    async def refuse(*args):
+        attempts.append(1)
+        await asyncio.sleep(0.05)
+        raise server.ToolError("Request was refused")
+
+    monkeypatch.setattr(server, "infer", refuse)
+
+    async def scenario():
+        return await asyncio.gather(
+            server.oneshot(prompt="hi"), server.oneshot(prompt="hi"), return_exceptions=True
+        )
+
+    results = asyncio.run(scenario())
+    assert len(attempts) == 1
+    assert all(isinstance(r, server.ToolError) for r in results)
+
+
+def test_a_new_call_retries_after_an_old_failure(calls, tmp_path):
+    other = other_session(tmp_path)
+    other.release(key_for("hi"), other.claim(key_for("hi")), error="Request was refused")
+    assert run(prompt="hi").cached is False and len(calls) == 1
+
+
+def test_databases_from_older_versions_are_upgraded(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.sqlite3"
+    db = sqlite3.connect(path)
+    db.execute(
+        "CREATE TABLE results (key TEXT PRIMARY KEY, request TEXT NOT NULL, text TEXT NOT NULL,"
+        " model TEXT NOT NULL, created_at REAL NOT NULL)"
+    )
+    db.execute("INSERT INTO results VALUES ('k', '{}', 'old answer', 'm', 1.0)")
+    db.commit()
+    db.close()
+
+    cache = Cache(path)
+    assert cache.get("k").text == "old answer"
+    cache.record_hit("k")
+    assert cache._db.execute("SELECT hits, response FROM results").fetchone() == (1, None)

@@ -25,8 +25,9 @@ when `output_schema` is set, otherwise `null`.
   not stored in the cache. Leaving `model` out and
   passing the default model explicitly produce the same key.
 - Sessions share the cache. If one is already running a request, others that send the same one
-  wait for its answer (`cached: true`) instead of paying for it again. If that call fails, the next
-  waiter runs it itself.
+  wait for its answer (`cached: true`) instead of paying for it again. If that call fails, they
+  get the same error. If it stops without an answer or an error (cancelled, or its session
+  died), the next waiter runs it itself.
 - Only complete answers are stored. Refusals and answers cut off at `max_tokens` raise an
   error and are not cached.
 - Every object in `output_schema` needs `"additionalProperties": false`. Claude Code enforces
@@ -40,6 +41,23 @@ when `output_schema` is set, otherwise `null`.
 - `CHEAPSHOT_MAX_FILE_BYTES` (default 1000000): cap on the total size of `files` in one call.
 - `CHEAPSHOT_MAX_CONCURRENCY` (default 4): most `claude` processes one session's server runs at once.
   Extra calls queue.
+
+## Is it paying off?
+
+Each entry counts the calls it answered without a model call (`hits`), and keeps the CLI's
+full JSON result for the call that produced it (`response`: tokens, cost, timings), minus the
+answer text:
+
+```sh
+sqlite3 ~/.claude/plugins/data/cheapshot-cheapshot/cache.sqlite3 "
+  SELECT count(*) AS entries, sum(hits) AS hits,
+         round(sum(json_extract(response, '$.total_cost_usd')), 4) AS cost_usd,
+         round(sum(hits * json_extract(response, '$.total_cost_usd')), 4) AS saved_usd
+  FROM results"
+```
+
+`cost_usd` is the list-price cost of the model calls made; `saved_usd` is what the hits would
+have cost. Entries from before this was recorded have no `response`.
 
 ## Development
 

@@ -25,12 +25,13 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 mcp = MCPServer(
     "cheapshot",
     instructions=(
-        "cheapshot runs a single stateless Claude request and caches the answer locally. "
-        "Prefer the oneshot tool for any idempotent, one-shot request whose answer depends only "
-        "on its input, instead of doing that work inline. It complements subagents rather than "
-        "replacing them: a subagent can call oneshot for the one-shot pieces of its task. "
-        "Pass files that already exist on disk by absolute path in `files` rather than pasting "
-        "their contents. Identical inputs (prompt, system, model, effort, output_schema, and the "
+        "cheapshot runs a single stateless Claude request and caches the answer locally. Use the "
+        "oneshot tool for self-contained, idempotent tasks worth a separate model call: work on "
+        "files already on disk (pass absolute paths in `files` rather than pasting them), long "
+        "answers from short inputs, and requests likely to be repeated. Answer short tasks you "
+        "can handle from context inline instead; each new call takes several seconds. It "
+        "complements subagents rather than replacing them: a subagent can call oneshot for the "
+        "one-shot pieces of its task. Identical inputs (prompt, system, model, effort, output_schema, and the "
         "contents of any files) return the cached answer at no cost."
     ),
 )
@@ -67,8 +68,8 @@ class OneshotResult(BaseModel):
 
 async def infer(
     model: str, prompt: str, system: str | None, effort: str | None, output_schema: dict | None
-) -> tuple[str, str]:
-    """Run one request through the `claude` CLI; return (text, model that served it)."""
+) -> tuple[str, str, dict]:
+    """Run one request through the `claude` CLI; return (text, model that served it, raw response)."""
     try:
         return await claude.infer(
             model, prompt, system, effort, cwd=default_cache_dir() / "workdir", output_schema=output_schema
@@ -90,10 +91,15 @@ async def oneshot(
 ) -> OneshotResult:
     """Send a single self-contained prompt to Claude and return its answer, cached locally.
 
-    Prefer this tool for every idempotent, one-shot request where possible: any task whose
-    answer depends only on the text you pass in, such as summarizing or classifying text,
-    extracting data, translating, drafting, or getting a second opinion. Use it instead of
-    doing that work inline.
+    Use it for self-contained, idempotent tasks whose answer depends only on what you pass
+    in, where a separate model call pays off:
+    - work on files already on disk, such as summarizing, reviewing, or extracting from them
+      (pass them in `files`);
+    - long answers from a short input, such as drafts, rewrites, or translations;
+    - requests likely to be repeated, in this session or others, such as the same check or
+      summary run again.
+    Answer inline instead when the task is short and you already have what you need in
+    context: a new call takes several seconds, and you pay to write out the prompt.
 
     It complements subagents rather than replacing them. Work that needs tools, exploration,
     or several steps still belongs in a subagent, and a subagent can call this tool for the
@@ -107,7 +113,8 @@ async def oneshot(
     requests the same way and leave out anything that changes between calls, like timestamps.
 
     Repeating the exact same prompt/system/model/effort/output_schema, with files whose
-    contents haven't changed, returns the stored answer instantly without a new model call. Set `refresh` to force a new call and overwrite the stored answer.
+    contents haven't changed, returns the stored answer instantly without a new model call.
+    Set `refresh` to force a new call and overwrite the stored answer.
 
     Args:
         prompt: The full user message.
@@ -146,6 +153,7 @@ async def oneshot(
     # Any stored answer satisfies a normal call; `refresh` only accepts one written after it began.
     since = time.time() if refresh else 0.0
     if (hit := cache.get(key)) and hit.created_at >= since:
+        cache.record_hit(key)
         return result(hit.text, True, hit.model, hit.created_at)
 
     entry, cached = await compute(key, request, full_prompt, output_schema, since)
@@ -158,23 +166,33 @@ async def compute(
     """Run the request once across all sessions; return (entry, whether another caller paid for it).
 
     If another session (or another call in this one) is already running the same key, wait
-    for its answer. If it fails, the next waiter takes over and tries itself. Only answers
-    created at or after `since` count.
+    for its answer, or fail with its error if it fails. If it stops without either (it was
+    cancelled or its process died), take over and run it. Only answers created at or after
+    `since` count.
     """
     cache = get_cache()
+    waiting_since = time.time()
     while True:
         if token := cache.claim(key):
+            error = None
             try:
                 # Another caller may have stored the answer just before we claimed.
                 if (hit := cache.get(key)) and hit.created_at >= since:
+                    cache.record_hit(key)
                     return hit, True
                 async with get_limiter():
-                    text, served_by = await infer(
+                    text, served_by, response = await infer(
                         request["model"], full_prompt, request["system"], request["effort"], output_schema
                     )
-                return cache.put(key, request, text, served_by), False
+                return cache.put(key, request, text, served_by, response), False
+            except ToolError as exc:
+                error = str(exc)
+                raise
             finally:
-                cache.release(key, token)
+                cache.release(key, token, error)
         await asyncio.sleep(POLL_INTERVAL)
         if (hit := cache.get(key)) and hit.created_at >= since:
+            cache.record_hit(key)
             return hit, True
+        if error := cache.failure(key, waiting_since):
+            raise ToolError(f"{error} (from a concurrent identical request)")

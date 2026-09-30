@@ -68,8 +68,8 @@ async def infer(
     effort: str | None,
     cwd: Path,
     output_schema: dict | None = None,
-) -> tuple[str, str]:
-    """Run one request; return (text, model that served it).
+) -> tuple[str, str, dict]:
+    """Run one request; return (text, model that served it, the CLI's full JSON result).
 
     With `output_schema`, text is the JSON document matching it.
 
@@ -110,5 +110,5 @@ async def infer(
     if output_schema is not None:
         if result.get("structured_output") is None:
             raise RuntimeError("claude returned no structured output for the schema.")
-        return json.dumps(result["structured_output"]), served_by
-    return result["result"], served_by
+        return json.dumps(result["structured_output"]), served_by, result
+    return result["result"], served_by, result
