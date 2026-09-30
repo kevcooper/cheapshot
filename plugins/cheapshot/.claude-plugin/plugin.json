@@ -1,6 +1,6 @@
 {
   "name": "cheapshot",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "One-shot Claude inference as an MCP tool, cached locally so repeat requests are free.",
   "author": { "name": "Kevin Cooper" }
 }

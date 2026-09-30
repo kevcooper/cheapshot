@@ -45,8 +45,9 @@ when `output_schema` is set, otherwise `null`.
   make no request.
 - **Stored locally:** the cache keeps each request (prompt, system prompt, model, effort,
   schema, and file paths with content hashes, but not file contents), the answer, and the
-  CLI's JSON result for the call. It's plain text in SQLite, and entries never expire; delete
-  the database file to clear it.
+  CLI's JSON result for the call. It's plain text in SQLite, readable only by your user (the
+  directory is `0700`, the files `0600`), and entries never expire; delete the database file to
+  clear it.
 - **Sent to Anthropic:** besides your prompt, system prompt, and files, the CLI adds a few
   things a bare API call wouldn't have: an identity line in the system prompt, your account's
   email address, and a message with the working directory (an empty folder in the cache
@@ -60,7 +61,9 @@ tools, and a handful of environment variables that turn off extras like reminder
 caching, and experimental betas. Those variables are undocumented Claude Code settings, found by
 capturing the requests the CLI sends, and were verified with Claude Code 2.1.286. A later
 version may ignore or change them; answers would keep working, but requests could carry more
-than described above.
+than described above. `tests/test_claude_cli.py` checks each setting against the installed
+CLI by capturing the request it sends, without making a model call; run it after updating
+Claude Code.
 
 ## Configuration
 
@@ -91,6 +94,7 @@ have cost. Entries from before this was recorded have no `response`.
 
 ```sh
 uv sync
-uv run pytest
+uv run pytest                            # includes checks of the installed claude CLI (no model calls)
+CHEAPSHOT_LIVE_TESTS=1 uv run pytest     # also makes three tiny Haiku calls
 uv run cheapshot   # runs the MCP server on stdio
 ```

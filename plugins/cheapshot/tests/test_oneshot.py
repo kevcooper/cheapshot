@@ -318,3 +318,27 @@ def test_upgrade_by_another_session_fails_writes_clearly(calls, tmp_path):
     other_session(tmp_path)._db.execute("PRAGMA user_version = 99")
     with pytest.raises(server.ToolError, match="upgraded by a newer version"):
         run(prompt="something new")
+
+
+def mode(path):
+    return path.stat().st_mode & 0o777
+
+
+def test_new_cache_is_private(tmp_path):
+    path = tmp_path / "data" / "cache.sqlite3"
+    cache = Cache(path)
+    cache.put("k", {}, "answer", "m")  # makes SQLite create the -wal and -shm files
+    assert mode(path.parent) == 0o700
+    for name in ("cache.sqlite3", "cache.sqlite3-wal", "cache.sqlite3-shm"):
+        assert mode(path.parent / name) == 0o600, name
+
+
+def test_existing_loose_permissions_are_tightened(tmp_path):
+    path = tmp_path / "data" / "cache.sqlite3"
+    Cache(path).put("k", {}, "answer", "m")
+    path.parent.chmod(0o755)
+    for file in path.parent.iterdir():
+        file.chmod(0o644)
+    Cache(path)
+    assert mode(path.parent) == 0o700
+    assert {mode(f) for f in path.parent.iterdir()} == {0o600}

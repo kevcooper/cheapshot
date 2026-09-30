@@ -74,7 +74,7 @@ class Entry:
 
 class Cache:
     def __init__(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        _make_private(path)
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute(
@@ -203,6 +203,22 @@ class Cache:
             (key, since),
         ).fetchone()
         return row[0] if row else None
+
+
+def _make_private(path: Path) -> None:
+    """Restrict the cache to the current user: it holds prompts and answers in plain text.
+
+    Creates the database with mode 0600 in a 0700 directory, and tightens both if an earlier
+    version created them with the default umask. SQLite gives the -wal and -shm files the
+    database's permissions when it creates them; existing ones are tightened here too.
+    """
+    directory = path.parent
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    os.close(os.open(path, os.O_CREAT | os.O_RDWR, 0o600))
+    for file in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
+        if file.exists():
+            file.chmod(0o600)
 
 
 def _alive(pid: int) -> bool:

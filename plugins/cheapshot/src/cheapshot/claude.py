@@ -27,13 +27,17 @@ FLAGS = [
     "--tools", "",  # no tool definitions
 ]
 
-# Each of these removes something from the request body.
+# Each of these removes something from the request body, except as noted; tests/test_claude_cli.py
+# checks that they still do.
 ENV = {
-    "CLAUDE_CODE_DISABLE_ATTACHMENTS": "1",  # date and model-identity reminders
+    # Reminder attachments. No visible effect as of 2.1.286 once child_env drops the calling
+    # session's variables (those were what added date and model reminders); kept as a guard.
+    "CLAUDE_CODE_DISABLE_ATTACHMENTS": "1",
     "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",  # billing header block at the top of `system`
     "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",  # context_management edits, extra betas
     "DISABLE_PROMPT_CACHING": "1",  # cache_control breakpoints
-    "CLAUDE_CODE_DISABLE_MODEL_ACCESS_FALLBACK": "1",  # never answer with a model we didn't ask for
+    # Not in the body: makes an unknown or unavailable model an error instead of a substitute.
+    "CLAUDE_CODE_DISABLE_MODEL_ACCESS_FALLBACK": "1",
 }
 
 # Variables Claude Code needs to authenticate or pick a provider; every other CLAUDE* variable
@@ -80,7 +84,7 @@ async def infer(
 
     `cwd` should be an empty directory: its path appears in the environment message.
     """
-    cwd.mkdir(parents=True, exist_ok=True)
+    cwd.mkdir(mode=0o700, parents=True, exist_ok=True)
     proc = await asyncio.create_subprocess_exec(
         *command(model, system, effort, output_schema),
         cwd=cwd,
