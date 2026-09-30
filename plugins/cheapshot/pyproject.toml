@@ -1,0 +1,25 @@
+[project]
+name = "cheapshot"
+version = "0.1.0"
+description = "Cached one-shot Claude inference exposed as an MCP tool"
+readme = "README.md"
+authors = [
+    { name = "Kevin Cooper", email = "git.oppose444@passmail.net" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=1.10.0",
+    "mcp>=2.2.0",
+]
+
+[project.scripts]
+cheapshot = "cheapshot:main"
+
+[build-system]
+requires = ["uv_build>=0.9.24,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

@@ -1,0 +1,11 @@
+{
+  "name": "cheapshot",
+  "owner": { "name": "Kevin Cooper" },
+  "plugins": [
+    {
+      "name": "cheapshot",
+      "source": "./plugins/cheapshot",
+      "description": "One-shot Claude inference as an MCP tool, cached locally so repeat requests are free."
+    }
+  ]
+}
