@@ -166,3 +166,45 @@ def test_concurrency_is_capped(calls, monkeypatch):
     monkeypatch.setattr(server, "infer", tracked)
     asyncio.run(gather(*({"prompt": str(i)} for i in range(6))))
     assert peak == 2
+
+
+def test_files_are_inlined_and_keyed_by_content(calls, tmp_path):
+    doc = tmp_path / "doc.txt"
+    doc.write_text("version one")
+    first = run(prompt="summarize", files=[str(doc)])
+    assert calls[0][1] == f'<file path="{doc}">\nversion one\n</file>\n\nsummarize'
+    assert run(prompt="summarize", files=[str(doc)]).cached is True
+
+    doc.write_text("version two")
+    edited = run(prompt="summarize", files=[str(doc)])
+    assert edited.cached is False and edited.cache_key != first.cache_key
+
+
+def test_stored_request_has_hashes_not_contents(calls, tmp_path):
+    doc = tmp_path / "doc.txt"
+    doc.write_text("secret contents")
+    run(prompt="summarize", files=[str(doc)])
+    (stored,) = server.get_cache()._db.execute("SELECT request FROM results").fetchone()
+    assert "secret contents" not in stored and json.loads(stored)["files"][0]["path"] == str(doc)
+
+
+@pytest.mark.parametrize(
+    "setup, message",
+    [
+        (lambda d: "relative/path.txt", "must be absolute"),
+        (lambda d: str(d / "missing.txt"), "Not a file"),
+        (lambda d: (d / "bin").write_bytes(b"\xff\xfe") and str(d / "bin"), "Not a UTF-8"),
+    ],
+)
+def test_bad_files_raise_readable_errors(calls, tmp_path, setup, message):
+    with pytest.raises(server.ToolError, match=message):
+        run(prompt="summarize", files=[setup(tmp_path)])
+    assert calls == []
+
+
+def test_file_size_cap(calls, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHEAPSHOT_MAX_FILE_BYTES", "10")
+    doc = tmp_path / "doc.txt"
+    doc.write_text("x" * 11)
+    with pytest.raises(server.ToolError, match="exceed 10 bytes"):
+        run(prompt="summarize", files=[str(doc)])

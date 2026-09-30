@@ -14,12 +14,15 @@ input comes in again, the stored answer comes back and no API call is made.
 | `model`   | `$CHEAPSHOT_MODEL` or `claude-sonnet-5` |                                                    |
 | `effort`  | model default                        | `low` / `medium` / `high` / `xhigh` / `max`        |
 | `output_schema` | none                           | JSON Schema the answer must match; parsed into `data` |
+| `files`   | none                                 | Absolute paths of UTF-8 text files to include before the prompt |
 | `refresh` | `false`                              | Skip the cache, run the request again, overwrite   |
 
 It returns `{text, data, cached, model, cache_key, created_at}`. `data` is the parsed answer
 when `output_schema` is set, otherwise `null`.
 
-- The cache key is a SHA-256 of `(model, prompt, system, effort)`, plus `output_schema` when set. Leaving `model` out and
+- The cache key is a SHA-256 of `(model, prompt, system, effort)`, plus `output_schema` when set, plus each file's
+  path and SHA-256 when `files` is set. Editing a file changes the key; the file contents are
+  not stored in the cache. Leaving `model` out and
   passing the default model explicitly produce the same key.
 - Sessions share the cache. If one is already running a request, others that send the same one
   wait for its answer (`cached: true`) instead of paying for it again. If that call fails, the next
@@ -34,6 +37,7 @@ when `output_schema` is set, otherwise `null`.
 
 - Credentials: whatever the `claude` CLI on your PATH is logged in with.
 - Cache location: `$CHEAPSHOT_CACHE_DIR`, else `$CLAUDE_PLUGIN_DATA`, else `~/.cache/cheapshot`.
+- `CHEAPSHOT_MAX_FILE_BYTES` (default 1000000): cap on the total size of `files` in one call.
 - `CHEAPSHOT_MAX_CONCURRENCY` (default 4): most `claude` processes one session's server runs at once.
   Extra calls queue.
 

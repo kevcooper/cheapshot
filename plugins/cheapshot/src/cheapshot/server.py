@@ -12,7 +12,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel
 
-from cheapshot import claude
+from cheapshot import claude, files as file_input
 from cheapshot.cache import Cache, Entry, cache_key, default_cache_dir
 
 DEFAULT_MODEL = "claude-sonnet-5"
@@ -29,8 +29,9 @@ mcp = MCPServer(
         "Prefer the oneshot tool for any idempotent, one-shot request whose answer depends only "
         "on its input, instead of doing that work inline. It complements subagents rather than "
         "replacing them: a subagent can call oneshot for the one-shot pieces of its task. "
-        "Identical inputs (prompt, system, model, effort, output_schema) return the cached answer "
-        "at no cost."
+        "Pass files that already exist on disk by absolute path in `files` rather than pasting "
+        "their contents. Identical inputs (prompt, system, model, effort, output_schema, and the "
+        "contents of any files) return the cached answer at no cost."
     ),
 )
 
@@ -84,6 +85,7 @@ async def oneshot(
     model: str | None = None,
     effort: Effort | None = None,
     output_schema: dict[str, Any] | None = None,
+    files: list[str] | None = None,
     refresh: bool = False,
 ) -> OneshotResult:
     """Send a single self-contained prompt to Claude and return its answer, cached locally.
@@ -97,13 +99,15 @@ async def oneshot(
     or several steps still belongs in a subagent, and a subagent can call this tool for the
     one-shot pieces of its own task.
 
-    Don't use it when the task needs tools, files, the conversation so far, or current
-    information: the model sees nothing but `prompt` (and `system`), so include all needed
-    context in the prompt. For more cache hits, word repeated requests the same way and leave
-    out anything that changes between calls, like timestamps.
+    Don't use it when the task needs tools, the conversation so far, or current information:
+    the model sees only `prompt`, `system`, and the contents of `files`, so include all needed
+    context. To work on files that already exist, pass their absolute paths in `files` instead
+    of pasting them into the prompt; naming a file in the prompt does not show it to the model.
+    Don't write text to a file just to pass it here. For more cache hits, word repeated
+    requests the same way and leave out anything that changes between calls, like timestamps.
 
-    Repeating the exact same prompt/system/model/effort/output_schema returns the stored answer instantly
-    without a new model call. Set `refresh` to force a new call and overwrite the stored answer.
+    Repeating the exact same prompt/system/model/effort/output_schema, with files whose
+    contents haven't changed, returns the stored answer instantly without a new model call. Set `refresh` to force a new call and overwrite the stored answer.
 
     Args:
         prompt: The full user message.
@@ -113,13 +117,23 @@ async def oneshot(
         output_schema: Optional JSON Schema the answer must match. The parsed answer is
             returned in `data` (and as JSON in `text`). Every object needs
             "additionalProperties": false.
+        files: Optional absolute paths of UTF-8 text files to include before the prompt.
+            Editing a file changes the cache key.
         refresh: Bypass the cache and re-run the request.
     """
     model = model or os.environ.get("CHEAPSHOT_MODEL") or DEFAULT_MODEL
     request = {"model": model, "prompt": prompt, "system": system, "effort": effort}
+    # Optional fields are only added when set, so keys cached before they existed stay valid.
     if output_schema is not None:
-        # Only added when set, so keys cached before output_schema existed stay valid.
         request["output_schema"] = output_schema
+    try:
+        loaded = file_input.load(files or [])
+    except (ValueError, OSError) as exc:
+        raise ToolError(str(exc)) from exc
+    if loaded:
+        # Content hashes, not contents: the key follows edits, and the database stays small.
+        request["files"] = [{"path": f.path, "sha256": f.sha256} for f in loaded]
+    full_prompt = file_input.render(loaded, prompt)
     key = cache_key(**request)
     cache = get_cache()
 
@@ -134,12 +148,12 @@ async def oneshot(
     if (hit := cache.get(key)) and hit.created_at >= since:
         return result(hit.text, True, hit.model, hit.created_at)
 
-    entry, cached = await compute(key, request, output_schema, since)
+    entry, cached = await compute(key, request, full_prompt, output_schema, since)
     return result(entry.text, cached, entry.model, entry.created_at)
 
 
 async def compute(
-    key: str, request: dict, output_schema: dict | None, since: float
+    key: str, request: dict, full_prompt: str, output_schema: dict | None, since: float
 ) -> tuple[Entry, bool]:
     """Run the request once across all sessions; return (entry, whether another caller paid for it).
 
@@ -156,7 +170,7 @@ async def compute(
                     return hit, True
                 async with get_limiter():
                     text, served_by = await infer(
-                        request["model"], request["prompt"], request["system"], request["effort"], output_schema
+                        request["model"], full_prompt, request["system"], request["effort"], output_schema
                     )
                 return cache.put(key, request, text, served_by), False
             finally:
