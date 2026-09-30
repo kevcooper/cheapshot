@@ -46,25 +46,38 @@ def child_env() -> dict[str, str]:
     return env | ENV
 
 
-def command(model: str, system: str | None, effort: str | None) -> list[str]:
+def command(
+    model: str, system: str | None, effort: str | None, output_schema: dict | None = None
+) -> list[str]:
     # `=` form so a system prompt starting with "-" isn't parsed as a flag. An empty one still
     # replaces Claude Code's default system prompt.
     cmd = ["claude", *FLAGS, "--model", model, f"--system-prompt={system or ''}"]
     if effort:
         cmd += ["--effort", effort]
+    if output_schema is not None:
+        # Claude Code enforces this with a synthetic tool and an extra turn, not the API's
+        # native output_config.format.
+        cmd.append(f"--json-schema={json.dumps(output_schema)}")
     return cmd
 
 
 async def infer(
-    model: str, prompt: str, system: str | None, effort: str | None, cwd: Path
+    model: str,
+    prompt: str,
+    system: str | None,
+    effort: str | None,
+    cwd: Path,
+    output_schema: dict | None = None,
 ) -> tuple[str, str]:
     """Run one request; return (text, model that served it).
+
+    With `output_schema`, text is the JSON document matching it.
 
     `cwd` should be an empty directory: its path appears in the environment message.
     """
     cwd.mkdir(parents=True, exist_ok=True)
     proc = await asyncio.create_subprocess_exec(
-        *command(model, system, effort),
+        *command(model, system, effort, output_schema),
         cwd=cwd,
         env=child_env(),
         stdin=asyncio.subprocess.PIPE,
@@ -94,4 +107,8 @@ async def infer(
 
     # modelUsage is keyed by model in the order they ran; after a refusal fallback the last one answered.
     served_by = list(result["modelUsage"])[-1]
+    if output_schema is not None:
+        if result.get("structured_output") is None:
+            raise RuntimeError("claude returned no structured output for the schema.")
+        return json.dumps(result["structured_output"]), served_by
     return result["result"], served_by
