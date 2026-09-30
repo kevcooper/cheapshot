@@ -1,7 +1,8 @@
 # cheapshot
 
 A Claude Code plugin that gives the agent one MCP tool, `oneshot`. The tool sends one
-stateless request to Claude and stores the answer in a local SQLite cache. When the same
+stateless request to Claude through the `claude` CLI (so it uses your existing Claude Code
+login) and stores the answer in a local SQLite cache. When the same
 input comes in again, the stored answer comes back and no API call is made.
 
 ## Tool: `oneshot`
@@ -20,11 +21,11 @@ It returns `{text, cached, model, cache_key, created_at}`.
   passing the default model explicitly produce the same key.
 - Only complete answers are stored. Refusals and answers cut off at `max_tokens` raise an
   error and are not cached.
-- On Opus 5 / 5.5 and Fable 5 / 5.1, server-side refusal fallbacks (`fallbacks: "default"`) are on.
+- `src/cheapshot/claude.py` documents what the CLI request still carries beyond a bare API call.
 
 ## Configuration
 
-- Credentials: the standard Anthropic SDK resolution (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or an `ant auth login` profile).
+- Credentials: whatever the `claude` CLI on your PATH is logged in with.
 - Cache location: `$CHEAPSHOT_CACHE_DIR`, else `$CLAUDE_PLUGIN_DATA`, else `~/.cache/cheapshot`.
 
 ## Development

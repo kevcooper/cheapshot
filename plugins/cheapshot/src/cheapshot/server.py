@@ -5,18 +5,14 @@ from __future__ import annotations
 import os
 from typing import Literal
 
-import anthropic
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel
 
+from cheapshot import claude
 from cheapshot.cache import Cache, cache_key, default_cache_dir
 
 DEFAULT_MODEL = "claude-opus-5"
-MAX_TOKENS = 64000
-
-# Models that accept server-side refusal fallbacks (`fallbacks: "default"`).
-FALLBACK_MODELS = {"claude-opus-5", "claude-opus-5-5", "claude-fable-5", "claude-fable-5-1"}
-FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
@@ -29,7 +25,6 @@ mcp = MCPServer(
 )
 
 _cache: Cache | None = None
-_client: anthropic.AsyncAnthropic | None = None
 
 
 def get_cache() -> Cache:
@@ -37,13 +32,6 @@ def get_cache() -> Cache:
     if _cache is None:
         _cache = Cache(default_cache_dir() / "cache.sqlite3")
     return _cache
-
-
-def get_client() -> anthropic.AsyncAnthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.AsyncAnthropic()
-    return _client
 
 
 class OneshotResult(BaseModel):
@@ -55,31 +43,12 @@ class OneshotResult(BaseModel):
 
 
 async def infer(model: str, prompt: str, system: str | None, effort: str | None) -> tuple[str, str]:
-    """Run one streamed request; return (text, model that served it)."""
-    params: dict = {
-        "model": model,
-        "max_tokens": MAX_TOKENS,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    if system:
-        params["system"] = system
-    if effort:
-        params["output_config"] = {"effort": effort}
-
-    client = get_client()
-    if model in FALLBACK_MODELS:
-        stream = client.beta.messages.stream(**params, betas=[FALLBACK_BETA], fallbacks="default")
-    else:
-        stream = client.messages.stream(**params)
-    async with stream as s:
-        message = await s.get_final_message()
-
-    if message.stop_reason == "refusal":
-        raise RuntimeError(f"Request was refused: {message.stop_details}")
-    if message.stop_reason == "max_tokens":
-        raise RuntimeError(f"Response truncated at max_tokens={MAX_TOKENS}; not cached.")
-    text = "".join(block.text for block in message.content if block.type == "text")
-    return text, message.model
+    """Run one request through the `claude` CLI; return (text, model that served it)."""
+    try:
+        return await claude.infer(model, prompt, system, effort, cwd=default_cache_dir() / "workdir")
+    except (RuntimeError, OSError) as exc:
+        # MCPServer hides the message of anything but ToolError from the model.
+        raise ToolError(str(exc)) from exc
 
 
 @mcp.tool()
@@ -97,7 +66,7 @@ async def oneshot(
     sees nothing but `prompt` (and `system`), so include all needed context in the prompt.
 
     Repeating the exact same prompt/system/model/effort returns the stored answer instantly
-    without a new API call. Set `refresh` to force a new call and overwrite the stored answer.
+    without a new model call. Set `refresh` to force a new call and overwrite the stored answer.
 
     Args:
         prompt: The full user message.
