@@ -5,10 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+# A claim older than this is presumed abandoned even if its process is still alive.
+CLAIM_TTL = 3600.0
 
 
 def default_cache_dir() -> Path:
@@ -47,6 +51,16 @@ class Cache:
                 created_at REAL NOT NULL
             )"""
         )
+        # Keys some process is currently computing, so concurrent sessions wait instead of
+        # paying for the same request twice.
+        self._db.execute(
+            """CREATE TABLE IF NOT EXISTS pending (
+                key TEXT PRIMARY KEY,
+                token TEXT NOT NULL,
+                pid INTEGER NOT NULL,
+                started_at REAL NOT NULL
+            )"""
+        )
         self._db.commit()
 
     def get(self, key: str) -> Entry | None:
@@ -63,3 +77,37 @@ class Cache:
         )
         self._db.commit()
         return entry
+
+    def claim(self, key: str) -> str | None:
+        """Mark `key` as being computed; return a release token, or None if someone else is."""
+        now = time.time()
+        # IMMEDIATE takes the write lock up front, so two processes can't both see no claim.
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._db.execute("SELECT pid, started_at FROM pending WHERE key = ?", (key,)).fetchone()
+            if row and _alive(row[0]) and now - row[1] < CLAIM_TTL:
+                self._db.rollback()
+                return None
+            token = secrets.token_hex(8)
+            self._db.execute(
+                "INSERT OR REPLACE INTO pending VALUES (?, ?, ?, ?)", (key, token, os.getpid(), now)
+            )
+            self._db.commit()
+            return token
+        except BaseException:
+            self._db.rollback()
+            raise
+
+    def release(self, key: str, token: str) -> None:
+        self._db.execute("DELETE FROM pending WHERE key = ? AND token = ?", (key, token))
+        self._db.commit()
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True

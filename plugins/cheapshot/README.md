@@ -21,6 +21,9 @@ when `output_schema` is set, otherwise `null`.
 
 - The cache key is a SHA-256 of `(model, prompt, system, effort)`, plus `output_schema` when set. Leaving `model` out and
   passing the default model explicitly produce the same key.
+- Sessions share the cache. If one is already running a request, others that send the same one
+  wait for its answer (`cached: true`) instead of paying for it again. If that call fails, the next
+  waiter runs it itself.
 - Only complete answers are stored. Refusals and answers cut off at `max_tokens` raise an
   error and are not cached.
 - Every object in `output_schema` needs `"additionalProperties": false`. Claude Code enforces
@@ -31,6 +34,8 @@ when `output_schema` is set, otherwise `null`.
 
 - Credentials: whatever the `claude` CLI on your PATH is logged in with.
 - Cache location: `$CHEAPSHOT_CACHE_DIR`, else `$CLAUDE_PLUGIN_DATA`, else `~/.cache/cheapshot`.
+- `CHEAPSHOT_MAX_CONCURRENCY` (default 4): most `claude` processes one session's server runs at once.
+  Extra calls queue.
 
 ## Development
 
