@@ -11,7 +11,7 @@ input comes in again, the stored answer comes back and no API call is made.
 |-----------|--------------------------------------|----------------------------------------------------|
 | `prompt`  | required                             | The full user message                              |
 | `system`  | none                                 | Optional system prompt                             |
-| `model`   | `$CHEAPSHOT_MODEL` or `claude-opus-5` |                                                    |
+| `model`   | `$CHEAPSHOT_MODEL` or `claude-sonnet-5` |                                                    |
 | `effort`  | model default                        | `low` / `medium` / `high` / `xhigh` / `max`        |
 | `output_schema` | none                           | JSON Schema the answer must match; parsed into `data` |
 | `refresh` | `false`                              | Skip the cache, run the request again, overwrite   |

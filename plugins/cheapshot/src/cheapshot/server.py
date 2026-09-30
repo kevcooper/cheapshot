@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from cheapshot import claude
 from cheapshot.cache import Cache, Entry, cache_key, default_cache_dir
 
-DEFAULT_MODEL = "claude-opus-5"
+DEFAULT_MODEL = "claude-sonnet-5"
 DEFAULT_MAX_CONCURRENCY = 4
 # How often a caller waiting on another session's identical request checks for its answer.
 POLL_INTERVAL = 0.5
@@ -108,7 +108,7 @@ async def oneshot(
     Args:
         prompt: The full user message.
         system: Optional system prompt.
-        model: Claude model ID. Defaults to $CHEAPSHOT_MODEL or claude-opus-5.
+        model: Claude model ID. Defaults to $CHEAPSHOT_MODEL or claude-sonnet-5.
         effort: Optional reasoning effort (low, medium, high, xhigh, max).
         output_schema: Optional JSON Schema the answer must match. The parsed answer is
             returned in `data` (and as JSON in `text`). Every object needs
