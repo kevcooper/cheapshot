@@ -32,7 +32,10 @@ mcp = MCPServer(
         "answers from short inputs, and requests likely to be repeated. Answer short tasks you "
         "can handle from context inline instead; each new call takes several seconds. It "
         "complements subagents rather than replacing them: a subagent can call oneshot for the "
-        "one-shot pieces of its task. Identical inputs (prompt, system, model, effort, output_schema, and the "
+        "one-shot pieces of its task. To get the most from the cache, break a larger problem into "
+        "small, self-contained questions that each depend only on their own input (for example, "
+        "one call per file), keep the instruction wording the same across calls, and leave out "
+        "incidental context such as timestamps or the overall goal. Identical inputs (prompt, system, model, effort, output_schema, and the "
         "contents of any files) return the cached answer at no cost."
     ),
 )
@@ -127,8 +130,19 @@ async def oneshot(
     the model sees only `prompt`, `system`, and the contents of `files`, so include all needed
     context. To work on files that already exist, pass their absolute paths in `files` instead
     of pasting them into the prompt; naming a file in the prompt does not show it to the model.
-    Don't write text to a file just to pass it here. For more cache hits, word repeated
-    requests the same way and leave out anything that changes between calls, like timestamps.
+    Don't write text to a file just to pass it here.
+
+    Get the most from the cache by breaking a larger problem into small, self-contained
+    questions whose answers depend only on their own inputs, and asking each one separately:
+    - One call per file or item (review each changed file, summarize each document) rather
+      than one call over all of them, so an edit to one input re-runs only its own call.
+    - Keep the instruction wording, `system`, and `output_schema` the same across calls, and
+      let only the input vary.
+    - Leave out anything incidental that would make otherwise identical questions differ:
+      timestamps, the overall task you're working on, session-specific names, or context the
+      question doesn't need.
+    Weigh this against the several seconds each new call takes: split where pieces are likely
+    to be asked again, not into fragments. Independent calls can run in parallel.
 
     Repeating the exact same prompt/system/model/effort/output_schema, with files whose
     contents haven't changed, returns the stored answer instantly without a new model call.
