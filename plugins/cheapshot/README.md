@@ -5,6 +5,10 @@ stateless request to Claude through the `claude` CLI (so it uses your existing C
 login) and stores the answer in a local SQLite cache. When the same
 input comes in again, the stored answer comes back and no API call is made.
 
+Requires macOS or Linux, a logged-in `claude` CLI on your PATH, and
+[uv](https://docs.astral.sh/uv/). Install instructions are in the
+[repository README](../../README.md).
+
 ## Tool: `oneshot`
 
 | Arg       | Default                              | Notes                                              |
@@ -33,6 +37,30 @@ when `output_schema` is set, otherwise `null`.
 - Every object in `output_schema` needs `"additionalProperties": false`. Claude Code enforces
   the schema with a synthetic tool and an extra turn, so schema calls cost a little more.
 - `src/cheapshot/claude.py` documents what the CLI request still carries beyond a bare API call.
+
+## What's stored and sent
+
+- **Your usage:** each new answer is a real Claude request made with your `claude` login, so it
+  counts against your subscription or API usage like any other Claude Code request. Cache hits
+  make no request.
+- **Stored locally:** the cache keeps each request (prompt, system prompt, model, effort,
+  schema, and file paths with content hashes, but not file contents), the answer, and the
+  CLI's JSON result for the call. It's plain text in SQLite, and entries never expire; delete
+  the database file to clear it.
+- **Sent to Anthropic:** besides your prompt, system prompt, and files, the CLI adds a few
+  things a bare API call wouldn't have: an identity line in the system prompt, your account's
+  email address, and a message with the working directory (an empty folder in the cache
+  directory), platform, shell, OS, model name, and date. See the top of
+  [`src/cheapshot/claude.py`](src/cheapshot/claude.py).
+
+## Claude Code compatibility
+
+To keep requests close to a bare API call, `claude.py` runs the CLI with `--safe-mode`, no
+tools, and a handful of environment variables that turn off extras like reminders, prompt
+caching, and experimental betas. Those variables are undocumented Claude Code settings, found by
+capturing the requests the CLI sends, and were verified with Claude Code 2.1.286. A later
+version may ignore or change them; answers would keep working, but requests could carry more
+than described above.
 
 ## Configuration
 

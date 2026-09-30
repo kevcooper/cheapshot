@@ -4,7 +4,12 @@ What the request still carries that a bare API call would not (none of it can be
 while authenticating with a Claude subscription):
 - the system prompt is prefixed with "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 - a <system-reminder> with the signed-in account's email address
-- a trailing `system` message describing the environment (cwd, platform, shell, OS)
+- a trailing `system` message with the environment (cwd, platform, shell, OS), the model's name,
+  and today's date
+
+The environment variables in ENV are undocumented Claude Code settings, found by capturing the
+requests the CLI sends. Verified with Claude Code 2.1.286; a later version may ignore or change
+them, which would make requests carry more than listed here.
 """
 
 from __future__ import annotations
