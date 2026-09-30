@@ -14,6 +14,18 @@ from pathlib import Path
 # A claim older than this is presumed abandoned even if its process is still alive.
 CLAIM_TTL = 3600.0
 
+# Stored in PRAGMA user_version. Bump it whenever the tables change in a way older code can't
+# write to, so a server started before an upgrade fails with a clear message instead.
+SCHEMA_VERSION = 1
+
+
+class SchemaTooNew(RuntimeError):
+    def __init__(self, found: int) -> None:
+        super().__init__(
+            f"The cheapshot cache was upgraded by a newer version (schema {found}, this server "
+            f"knows {SCHEMA_VERSION}); restart this session to use it."
+        )
+
 # Columns added after the first release, with their declarations. Databases created by an
 # older version get them on open.
 ADDED_COLUMNS = {
@@ -84,6 +96,7 @@ class Cache:
                 started_at REAL NOT NULL
             )"""
         )
+        self._check_version()
         for table, columns in ADDED_COLUMNS.items():
             existing = {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
             for name, decl in columns.items():
@@ -94,7 +107,17 @@ class Cache:
                         # Another process opening the same file added it first.
                         if "duplicate column" not in str(exc):
                             raise
+        if self._version() < SCHEMA_VERSION:
+            self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._db.commit()
+
+    def _version(self) -> int:
+        return self._db.execute("PRAGMA user_version").fetchone()[0]
+
+    def _check_version(self) -> None:
+        """Before writing: another session may have upgraded the file since this one opened it."""
+        if (found := self._version()) > SCHEMA_VERSION:
+            raise SchemaTooNew(found)
 
     def get(self, key: str) -> Entry | None:
         row = self._db.execute(
@@ -103,12 +126,14 @@ class Cache:
         return Entry(*row) if row else None
 
     def record_hit(self, key: str) -> None:
+        self._check_version()
         self._db.execute(
             "UPDATE results SET hits = hits + 1, last_hit_at = ? WHERE key = ?", (time.time(), key)
         )
         self._db.commit()
 
     def put(self, key: str, request: dict, text: str, model: str, response: dict | None = None) -> Entry:
+        self._check_version()
         entry = Entry(key, text, model, time.time())
         # Upsert rather than replace so a refreshed entry keeps its hit count.
         self._db.execute(
@@ -133,6 +158,7 @@ class Cache:
 
     def claim(self, key: str) -> str | None:
         """Mark `key` as being computed; return a release token, or None if someone else is."""
+        self._check_version()
         now = time.time()
         # IMMEDIATE takes the write lock up front, so two processes can't both see no claim.
         self._db.execute("BEGIN IMMEDIATE")

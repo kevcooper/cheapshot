@@ -7,6 +7,7 @@ import time
 import pytest
 
 from cheapshot import server
+from cheapshot import cache as cache_module
 from cheapshot.cache import Cache
 
 
@@ -299,3 +300,21 @@ def test_databases_from_older_versions_are_upgraded(tmp_path):
     assert cache.get("k").text == "old answer"
     cache.record_hit("k")
     assert cache._db.execute("SELECT hits, response FROM results").fetchone() == (1, None)
+
+
+def test_new_databases_record_the_schema_version(tmp_path):
+    cache = Cache(tmp_path / "db.sqlite3")
+    assert cache._version() == cache_module.SCHEMA_VERSION
+
+
+def test_opening_a_newer_database_fails_clearly(tmp_path):
+    Cache(tmp_path / "db.sqlite3")._db.execute("PRAGMA user_version = 99")
+    with pytest.raises(cache_module.SchemaTooNew, match="restart this session"):
+        Cache(tmp_path / "db.sqlite3")
+
+
+def test_upgrade_by_another_session_fails_writes_clearly(calls, tmp_path):
+    run(prompt="hi")
+    other_session(tmp_path)._db.execute("PRAGMA user_version = 99")
+    with pytest.raises(server.ToolError, match="upgraded by a newer version"):
+        run(prompt="something new")

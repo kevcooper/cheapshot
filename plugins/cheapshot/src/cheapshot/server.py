@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
 import time
@@ -13,7 +14,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel
 
 from cheapshot import claude, files as file_input
-from cheapshot.cache import Cache, Entry, cache_key, default_cache_dir
+from cheapshot.cache import Cache, Entry, SchemaTooNew, cache_key, default_cache_dir
 
 DEFAULT_MODEL = "claude-sonnet-5"
 DEFAULT_MAX_CONCURRENCY = 4
@@ -57,6 +58,22 @@ def get_limiter() -> asyncio.Semaphore:
     return _limiter
 
 
+def surface(*errors: type[Exception]):
+    """Re-raise `errors` as ToolError: MCPServer hides the message of any other exception."""
+
+    def wrap(fn):
+        @functools.wraps(fn)
+        async def inner(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except errors as exc:
+                raise ToolError(str(exc)) from exc
+
+        return inner
+
+    return wrap
+
+
 class OneshotResult(BaseModel):
     text: str
     data: Any = None
@@ -80,6 +97,7 @@ async def infer(
 
 
 @mcp.tool()
+@surface(SchemaTooNew)
 async def oneshot(
     prompt: str,
     system: str | None = None,
