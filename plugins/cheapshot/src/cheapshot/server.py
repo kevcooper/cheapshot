@@ -35,8 +35,11 @@ mcp = MCPServer(
         "one-shot pieces of its task. To get the most from the cache, break a larger problem into "
         "small, self-contained questions that each depend only on their own input (for example, "
         "one call per file), keep the instruction wording the same across calls, and leave out "
-        "incidental context such as timestamps or the overall goal. Identical inputs (prompt, system, model, effort, output_schema, and the "
-        "contents of any files) return the cached answer at no cost."
+        "incidental context such as timestamps or the overall goal. Before running calls "
+        "concurrently that share files or a long system prompt, warm the prompt cache: send one "
+        "first and wait for it, then send the rest in parallel. Identical inputs (prompt, "
+        "system, model, effort, output_schema, and the contents of any files) return the cached "
+        "answer at no cost."
     ),
 )
 
@@ -158,10 +161,16 @@ async def oneshot(
       timestamps, the overall task you're working on, session-specific names, or context the
       question doesn't need.
     Weigh this against the several seconds each new call takes: split where pieces are likely
-    to be asked again, not into fragments. Independent calls can run in parallel, except
-    several questions about the same files: send the first and wait for it, so the rest read
-    the files from the prompt cache (see `cache_files`) instead of each paying for them.
-    Turn `cache_files` off for a large file you won't ask about again.
+    to be asked again, not into fragments. Independent calls can run in parallel.
+
+    Warm the prompt cache before running calls concurrently that share a prefix: the same
+    files, or the same long `system` prompt (for example, many inputs classified against one
+    reference file). The prompt cache only has an entry once a call has finished, so calls
+    sent together each pay full price for the shared part. Send one of them first and wait
+    for it to finish; it can be a real question, not a throwaway. Then send the rest in
+    parallel, and each reads the shared part at about a tenth of the input price. Within
+    `cache_ttl` (5 minutes by default) the cache stays warm, so a long run of calls keeps
+    hitting it. Turn `cache_files` off for a large file you won't ask about again.
 
     Repeating the exact same prompt/system/model/effort/output_schema, with files whose
     contents haven't changed, returns the stored answer instantly without a new model call.

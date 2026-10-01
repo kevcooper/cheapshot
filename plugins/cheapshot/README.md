@@ -79,8 +79,11 @@ with a 19k-token file, the second question cost about 91% less than the first.
 Writing a cache entry costs more than plain input: about 1.25x for the default 5-minute
 lifetime and 2x for 1 hour. So 5 minutes pays off after one reuse, and 1 hour after two.
 Agents choose per call with `cache_prompt`, `cache_files`, and `cache_ttl`; none of them change
-the answer or the local cache key. Questions about the same files only hit the prompt cache
-once the first has finished, so they should be sent one after another rather than all at once.
+the answer or the local cache key.
+
+A prompt-cache entry only exists once a call has finished, so calls sent together that share
+files or a long system prompt each pay full price for the shared part. Warm the cache first:
+send one of them (a real question works) and wait for it, then send the rest in parallel.
 
 ## Configuration
 
