@@ -68,15 +68,23 @@ def capture():
 
 
 def send(
-    capture, tmp_path, *, system="Be terse.", effort=None, output_schema=None, env=None, attachments=()
+    capture,
+    tmp_path,
+    *,
+    system="Be terse.",
+    effort=None,
+    output_schema=None,
+    env=None,
+    attachments=(),
+    caching=claude.Caching(),
 ):
     """Run the CLI the way claude.infer does and return the request it sent."""
     url, bodies = capture
     proc = subprocess.run(
         claude.command(MODEL, system, effort, output_schema),
-        input=claude.message(list(attachments), "Say hi"),
+        input=claude.message(list(attachments), "Say hi", caching),
         cwd=tmp_path,
-        env=claude.child_env() | (env or {}) | {"ANTHROPIC_BASE_URL": url},
+        env=claude.child_env(caching) | (env or {}) | {"ANTHROPIC_BASE_URL": url},
         capture_output=True,
         timeout=120,
     )
@@ -122,6 +130,41 @@ def test_prompt_caching_can_be_turned_off(capture, tmp_path, monkeypatch):
     monkeypatch.setenv("CHEAPSHOT_PROMPT_CACHING", "0")  # child_env maps it to DISABLE_PROMPT_CACHING
     body = send(capture, tmp_path, attachments=["<file>a</file>"])
     assert "cache_control" not in json.dumps(body), cli_version()
+
+
+def marks(body) -> tuple[list, list]:
+    """The cache_control of each system block and each user content block."""
+    return (
+        [block.get("cache_control") for block in body["system"]],
+        [block.get("cache_control") for block in body["messages"][0]["content"]],
+    )
+
+
+@pytest.mark.parametrize("ttl", ["5m", "1h"])
+def test_every_breakpoint_uses_the_requested_ttl(capture, tmp_path, ttl):
+    # CLAUDE_CODE_PROMPT_CACHE_TTL sets Claude Code's breakpoints; ours must match, since the API
+    # rejects a longer-lived breakpoint after a shorter one.
+    caching = claude.Caching(ttl=ttl)
+    system, user = marks(send(capture, tmp_path, attachments=["<file>a</file>"], caching=caching))
+    *_, file_mark, prompt_mark = user
+    assert system == [caching.mark(), caching.mark()], cli_version()
+    assert file_mark == prompt_mark == caching.mark(), cli_version()
+
+
+def test_file_caching_works_without_prompt_caching(capture, tmp_path):
+    caching = claude.Caching(prompt=False)
+    system, user = marks(send(capture, tmp_path, attachments=["<file>a</file>"], caching=caching))
+    *_, file_mark, prompt_mark = user
+    assert system == [None, None] and prompt_mark is None, cli_version()
+    assert file_mark == caching.mark(), "Claude Code dropped our breakpoint"
+
+
+def test_prompt_caching_works_without_file_caching(capture, tmp_path):
+    caching = claude.Caching(files=False)
+    system, user = marks(send(capture, tmp_path, attachments=["<file>a</file>"], caching=caching))
+    *_, file_mark, prompt_mark = user
+    assert file_mark is None
+    assert system[-1] == prompt_mark == caching.mark(), cli_version()
 
 
 def test_files_are_separate_blocks_with_their_own_cache_breakpoint(capture, tmp_path):

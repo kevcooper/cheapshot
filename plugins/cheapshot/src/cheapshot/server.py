@@ -93,6 +93,7 @@ async def infer(
     effort: str | None,
     output_schema: dict | None,
     attachments: list[str],
+    caching: claude.Caching,
 ) -> tuple[str, str, dict]:
     """Run one request through the `claude` CLI; return (text, model that served it, raw response)."""
     try:
@@ -104,6 +105,7 @@ async def infer(
             cwd=default_cache_dir() / "workdir",
             output_schema=output_schema,
             attachments=attachments,
+            caching=caching,
         )
     except (RuntimeError, OSError) as exc:
         # MCPServer hides the message of anything but ToolError from the model.
@@ -119,6 +121,9 @@ async def oneshot(
     effort: Effort | None = None,
     output_schema: dict[str, Any] | None = None,
     files: list[str] | None = None,
+    cache_prompt: bool = True,
+    cache_files: bool = True,
+    cache_ttl: claude.CacheTTL = "5m",
     refresh: bool = False,
 ) -> OneshotResult:
     """Send a single self-contained prompt to Claude and return its answer, cached locally.
@@ -153,7 +158,10 @@ async def oneshot(
       timestamps, the overall task you're working on, session-specific names, or context the
       question doesn't need.
     Weigh this against the several seconds each new call takes: split where pieces are likely
-    to be asked again, not into fragments. Independent calls can run in parallel.
+    to be asked again, not into fragments. Independent calls can run in parallel, except
+    several questions about the same files: send the first and wait for it, so the rest read
+    the files from the prompt cache (see `cache_files`) instead of each paying for them.
+    Turn `cache_files` off for a large file you won't ask about again.
 
     Repeating the exact same prompt/system/model/effort/output_schema, with files whose
     contents haven't changed, returns the stored answer instantly without a new model call.
@@ -169,6 +177,15 @@ async def oneshot(
             "additionalProperties": false.
         files: Optional absolute paths of UTF-8 text files to include before the prompt.
             Editing a file changes the cache key.
+        cache_prompt: Prompt-cache the system prompt and prompt, so a later call reusing the
+            same system prompt reads it at a fraction of the input price. Default on.
+        cache_files: Prompt-cache the files, so another question about the same files reads
+            them at a fraction of the input price. Default on.
+        cache_ttl: How long those cache entries live: "5m" (default) or "1h". Writing an
+            entry costs about 1.25x the input price for 5m and 2x for 1h, and each read
+            about 0.1x, so 5m pays off after one reuse and 1h after two. Use 1h only when
+            the same system prompt or files will be sent again more than 5 minutes later.
+            These settings never change the answer or the local cache key.
         refresh: Bypass the cache and re-run the request.
     """
     model = model or os.environ.get("CHEAPSHOT_MODEL") or DEFAULT_MODEL
@@ -199,12 +216,18 @@ async def oneshot(
         cache.record_hit(key)
         return result(hit.text, True, hit.model, hit.created_at)
 
-    entry, cached = await compute(key, request, attachments, output_schema, since)
+    caching = claude.Caching(prompt=cache_prompt, files=cache_files, ttl=cache_ttl)
+    entry, cached = await compute(key, request, attachments, caching, output_schema, since)
     return result(entry.text, cached, entry.model, entry.created_at)
 
 
 async def compute(
-    key: str, request: dict, attachments: list[str], output_schema: dict | None, since: float
+    key: str,
+    request: dict,
+    attachments: list[str],
+    caching: claude.Caching,
+    output_schema: dict | None,
+    since: float,
 ) -> tuple[Entry, bool]:
     """Run the request once across all sessions; return (entry, whether another caller paid for it).
 
@@ -231,6 +254,7 @@ async def compute(
                         request["effort"],
                         output_schema,
                         attachments,
+                        caching,
                     )
                 return cache.put(key, request, text, served_by, response), False
             except ToolError as exc:

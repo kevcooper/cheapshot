@@ -19,6 +19,9 @@ Requires macOS or Linux, a logged-in `claude` CLI on your PATH, and
 | `effort`  | model default                        | `low` / `medium` / `high` / `xhigh` / `max`        |
 | `output_schema` | none                           | JSON Schema the answer must match; parsed into `data` |
 | `files`   | none                                 | Absolute paths of UTF-8 text files to include before the prompt |
+| `cache_prompt` | `true`                          | Prompt-cache the system prompt and the prompt      |
+| `cache_files` | `true`                           | Prompt-cache the files, for more questions about them |
+| `cache_ttl` | `5m`                               | Prompt-cache lifetime: `5m` or `1h`                |
 | `refresh` | `false`                              | Skip the cache, run the request again, overwrite   |
 
 It returns `{text, data, cached, model, cache_key, created_at}`. `data` is the parsed answer
@@ -65,16 +68,30 @@ keep working, but requests could carry more than described above. `tests/test_cl
 checks each setting against the installed CLI by capturing the request it sends, without making
 a model call; run it after updating Claude Code.
 
+## Prompt caching
+
+Separate from cheapshot's own cache (which answers exact repeats without any model call), the
+model call itself uses Claude's prompt caching. Files go in their own content blocks ahead of
+the prompt, so a different question about the same files, or a call reusing the same long
+system prompt, reads that part from the cache at about a tenth of the input price. In a test
+with a 19k-token file, the second question cost about 91% less than the first.
+
+Writing a cache entry costs more than plain input: about 1.25x for the default 5-minute
+lifetime and 2x for 1 hour. So 5 minutes pays off after one reuse, and 1 hour after two.
+Agents choose per call with `cache_prompt`, `cache_files`, and `cache_ttl`; none of them change
+the answer or the local cache key. Questions about the same files only hit the prompt cache
+once the first has finished, so they should be sent one after another rather than all at once.
+
 ## Configuration
+
+Per-call choices are tool arguments, made by the agent. These environment variables are for
+you: where data lives, limits the agent shouldn't be able to raise, and your defaults.
 
 - Credentials: whatever the `claude` CLI on your PATH is logged in with.
 - Cache location: `$CHEAPSHOT_CACHE_DIR`, else `$CLAUDE_PLUGIN_DATA`, else `~/.cache/cheapshot`.
-- `CHEAPSHOT_PROMPT_CACHING` (default on): set to `0` to send requests without prompt caching.
-  With it on, the system prompt, the files, and the prompt are each marked for 1-hour caching.
-  Files go in their own content blocks ahead of the prompt, so different questions about the
-  same files within the hour read them from the cache at a fraction of the input price (about
-  94% less in a test with a 19k-token file). Writing the cache costs more than plain input, so
-  a one-off call with large files costs somewhat more.
+- `CHEAPSHOT_MODEL`: default model when a call doesn't set `model` (otherwise `claude-sonnet-5`).
+- `CHEAPSHOT_PROMPT_CACHING`: set to `0` to turn prompt caching off for every call, whatever
+  the call's `cache_*` arguments say.
 - `CHEAPSHOT_MAX_FILE_BYTES` (default 1000000): cap on the total size of `files` in one call.
 - `CHEAPSHOT_MAX_CONCURRENCY` (default 4): most `claude` processes one session's server runs at once.
   Extra calls queue.

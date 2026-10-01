@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from cheapshot import server
+from cheapshot import claude, server
 from cheapshot import cache as cache_module
 from cheapshot.cache import Cache
 
@@ -20,8 +20,8 @@ def calls(tmp_path, monkeypatch):
     monkeypatch.delenv("CHEAPSHOT_MAX_CONCURRENCY", raising=False)
     recorded = []
 
-    async def fake_infer(model, prompt, system, effort, output_schema, attachments):
-        recorded.append((model, prompt, system, effort, output_schema, attachments))
+    async def fake_infer(model, prompt, system, effort, output_schema, attachments, caching):
+        recorded.append((model, prompt, system, effort, output_schema, attachments, caching))
         await asyncio.sleep(0.05)
         if output_schema is not None:
             return json.dumps({"n": len(recorded)}), model, fake_response(len(recorded))
@@ -343,3 +343,11 @@ def test_existing_loose_permissions_are_tightened(tmp_path):
     Cache(path)
     assert mode(path.parent) == 0o700
     assert {mode(f) for f in path.parent.iterdir()} == {0o600}
+
+
+def test_caching_options_reach_infer_without_changing_the_key(calls):
+    first = run(prompt="hi")
+    assert calls[0][6] == claude.Caching(prompt=True, files=True, ttl="5m")
+    other = run(prompt="hi", cache_prompt=False, cache_files=False, cache_ttl="1h", refresh=True)
+    assert other.cache_key == first.cache_key
+    assert calls[1][6] == claude.Caching(prompt=False, files=False, ttl="1h")

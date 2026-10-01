@@ -1,6 +1,6 @@
 [project]
 name = "cheapshot"
-version = "0.1.5"
+version = "0.1.6"
 description = "Cached one-shot Claude inference exposed as an MCP tool"
 license = "MIT"
 readme = "README.md"

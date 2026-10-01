@@ -17,7 +17,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 FLAGS = [
     "--print",
@@ -49,33 +51,60 @@ KEEP = {"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"}
 KEEP_PREFIXES = ("CLAUDE_CODE_USE_", "CLAUDE_CODE_SKIP_")
 
 
-def caching_enabled() -> bool:
-    return os.environ.get("CHEAPSHOT_PROMPT_CACHING") != "0"
+CacheTTL = Literal["5m", "1h"]
 
 
-def child_env() -> dict[str, str]:
+@dataclass(frozen=True)
+class Caching:
+    """Which parts of a request get prompt-cache breakpoints, and for how long.
+
+    Writing a cache entry costs more than plain input (about 1.25x for 5 minutes, 2x for an
+    hour) and reading one costs about a tenth, so a breakpoint pays off when its prefix is sent
+    again before it expires. None of this changes the answer.
+    """
+
+    prompt: bool = True  # Claude Code's own breakpoints: the system prompt and the prompt
+    files: bool = True  # ours: after the last file, shared by any question about those files
+    ttl: CacheTTL = "5m"
+
+    def effective(self) -> Caching:
+        # CHEAPSHOT_PROMPT_CACHING=0 turns all caching off, whatever the call asks for.
+        if os.environ.get("CHEAPSHOT_PROMPT_CACHING") == "0":
+            return Caching(prompt=False, files=False, ttl=self.ttl)
+        return self
+
+    def mark(self) -> dict:
+        # The API reads a mark without `ttl` as 5 minutes, which is how Claude Code sends them.
+        return {"type": "ephemeral"} if self.ttl == "5m" else {"type": "ephemeral", "ttl": self.ttl}
+
+
+def child_env(caching: Caching = Caching()) -> dict[str, str]:
     env = {
         k: v
         for k, v in os.environ.items()
         if not k.startswith("CLAUDE") or k in KEEP or k.startswith(KEEP_PREFIXES)
     }
-    # Prompt caching stays on (1-hour breakpoints on the system prompt and the prompt) unless
-    # turned off, since repeated prefixes then bill at a fraction of the input price.
-    if not caching_enabled():
+    caching = caching.effective()
+    if not caching.prompt:
         env["DISABLE_PROMPT_CACHING"] = "1"
+    # Always explicit: Claude Code's default depends on the login (1 hour on a subscription,
+    # 5 minutes with an API key), and our file breakpoint must use the same TTL because the API
+    # rejects a longer-lived breakpoint after a shorter one.
+    env["CLAUDE_CODE_PROMPT_CACHE_TTL"] = caching.ttl
     return env | ENV
 
 
-def message(attachments: list[str], prompt: str) -> bytes:
+def message(attachments: list[str], prompt: str, caching: Caching = Caching()) -> bytes:
     """The stdin line: one text block per attachment (rendered file), then the prompt.
 
-    Claude Code marks the system prompt and the last block (the prompt) for caching itself. A
-    mark on the last attachment as well writes a cache entry that ends at the files, so another
-    question about the same files reuses it. That makes four breakpoints, the API's maximum.
+    With `caching.prompt`, Claude Code marks the system prompt and the last block (the prompt)
+    itself. With `caching.files`, a mark on the last attachment writes a cache entry that ends at
+    the files, so another question about the same files reuses it. All on, that's four
+    breakpoints, the API's maximum.
     """
     blocks = [{"type": "text", "text": text} for text in attachments]
-    if blocks and caching_enabled():
-        blocks[-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+    if blocks and caching.effective().files:
+        blocks[-1]["cache_control"] = caching.mark()
     blocks.append({"type": "text", "text": prompt})
     line = {"type": "user", "message": {"role": "user", "content": blocks}}
     return (json.dumps(line) + "\n").encode()
@@ -104,6 +133,7 @@ async def infer(
     cwd: Path,
     output_schema: dict | None = None,
     attachments: list[str] = (),
+    caching: Caching = Caching(),
 ) -> tuple[str, str, dict]:
     """Run one request; return (text, model that served it, the CLI's JSON result).
 
@@ -116,14 +146,14 @@ async def infer(
     proc = await asyncio.create_subprocess_exec(
         *command(model, system, effort, output_schema),
         cwd=cwd,
-        env=child_env(),
+        env=child_env(caching),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     try:
         # The prompt goes over stdin: no argv size limit, and it can't be mistaken for a flag.
-        stdout, stderr = await proc.communicate(message(list(attachments), prompt))
+        stdout, stderr = await proc.communicate(message(list(attachments), prompt, caching))
     finally:
         if proc.returncode is None:
             proc.kill()
