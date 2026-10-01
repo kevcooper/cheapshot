@@ -40,7 +40,6 @@ def load(paths: list[str]) -> list[LoadedFile]:
     return loaded
 
 
-def render(files: list[LoadedFile], prompt: str) -> str:
-    """The prompt the model sees: each file in a tagged block, then the instructions."""
-    blocks = [f'<file path="{f.path}">\n{f.text}\n</file>' for f in files]
-    return "\n\n".join([*blocks, prompt])
+def render(file: LoadedFile) -> str:
+    """How a file appears to the model: its own content block, tagged with its path."""
+    return f'<file path="{file.path}">\n{file.text}\n</file>'

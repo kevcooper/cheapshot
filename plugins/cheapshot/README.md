@@ -56,23 +56,25 @@ when `output_schema` is set, otherwise `null`.
 
 ## Claude Code compatibility
 
-To keep requests close to a bare API call, `claude.py` runs the CLI with `--safe-mode`, no
-tools, and a handful of environment variables that turn off extras like reminders, the
-billing header, and experimental betas. Those variables are undocumented Claude Code settings, found by
-capturing the requests the CLI sends, and were verified with Claude Code 2.1.286. A later
-version may ignore or change them; answers would keep working, but requests could carry more
-than described above. `tests/test_claude_cli.py` checks each setting against the installed
-CLI by capturing the request it sends, without making a model call; run it after updating
-Claude Code.
+To keep requests close to a bare API call, `claude.py` runs the CLI with structured
+(`stream-json`) input, `--safe-mode`, no tools, and a handful of environment variables that
+turn off extras like reminders, the billing header, and experimental betas. Those variables are
+undocumented Claude Code settings, found by capturing the requests the CLI sends, and were
+verified with Claude Code 2.1.286. A later version may ignore or change them; answers would
+keep working, but requests could carry more than described above. `tests/test_claude_cli.py`
+checks each setting against the installed CLI by capturing the request it sends, without making
+a model call; run it after updating Claude Code.
 
 ## Configuration
 
 - Credentials: whatever the `claude` CLI on your PATH is logged in with.
 - Cache location: `$CHEAPSHOT_CACHE_DIR`, else `$CLAUDE_PLUGIN_DATA`, else `~/.cache/cheapshot`.
 - `CHEAPSHOT_PROMPT_CACHING` (default on): set to `0` to send requests without prompt caching.
-  With it on, Claude Code marks the system prompt and the prompt for 1-hour caching, so a
-  repeated prefix within the hour bills at a fraction of the input price; writing the cache
-  costs more than plain input.
+  With it on, the system prompt, the files, and the prompt are each marked for 1-hour caching.
+  Files go in their own content blocks ahead of the prompt, so different questions about the
+  same files within the hour read them from the cache at a fraction of the input price (about
+  94% less in a test with a 19k-token file). Writing the cache costs more than plain input, so
+  a one-off call with large files costs somewhat more.
 - `CHEAPSHOT_MAX_FILE_BYTES` (default 1000000): cap on the total size of `files` in one call.
 - `CHEAPSHOT_MAX_CONCURRENCY` (default 4): most `claude` processes one session's server runs at once.
   Extra calls queue.

@@ -20,8 +20,8 @@ def calls(tmp_path, monkeypatch):
     monkeypatch.delenv("CHEAPSHOT_MAX_CONCURRENCY", raising=False)
     recorded = []
 
-    async def fake_infer(model, prompt, system, effort, output_schema):
-        recorded.append((model, prompt, system, effort, output_schema))
+    async def fake_infer(model, prompt, system, effort, output_schema, attachments):
+        recorded.append((model, prompt, system, effort, output_schema, attachments))
         await asyncio.sleep(0.05)
         if output_schema is not None:
             return json.dumps({"n": len(recorded)}), model, fake_response(len(recorded))
@@ -177,7 +177,8 @@ def test_files_are_inlined_and_keyed_by_content(calls, tmp_path):
     doc = tmp_path / "doc.txt"
     doc.write_text("version one")
     first = run(prompt="summarize", files=[str(doc)])
-    assert calls[0][1] == f'<file path="{doc}">\nversion one\n</file>\n\nsummarize'
+    assert calls[0][1] == "summarize"
+    assert calls[0][5] == [f'<file path="{doc}">\nversion one\n</file>']
     assert run(prompt="summarize", files=[str(doc)]).cached is True
 
     doc.write_text("version two")

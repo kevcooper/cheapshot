@@ -67,12 +67,14 @@ def capture():
     server.shutdown()
 
 
-def send(capture, tmp_path, *, system="Be terse.", effort=None, output_schema=None, env=None):
+def send(
+    capture, tmp_path, *, system="Be terse.", effort=None, output_schema=None, env=None, attachments=()
+):
     """Run the CLI the way claude.infer does and return the request it sent."""
     url, bodies = capture
     proc = subprocess.run(
         claude.command(MODEL, system, effort, output_schema),
-        input=b"Say hi",
+        input=claude.message(list(attachments), "Say hi"),
         cwd=tmp_path,
         env=claude.child_env() | (env or {}) | {"ANTHROPIC_BASE_URL": url},
         capture_output=True,
@@ -118,7 +120,19 @@ def test_prompt_caching_is_on_by_default(capture, tmp_path):
 
 def test_prompt_caching_can_be_turned_off(capture, tmp_path, monkeypatch):
     monkeypatch.setenv("CHEAPSHOT_PROMPT_CACHING", "0")  # child_env maps it to DISABLE_PROMPT_CACHING
-    assert "cache_control" not in json.dumps(send(capture, tmp_path)), cli_version()
+    body = send(capture, tmp_path, attachments=["<file>a</file>"])
+    assert "cache_control" not in json.dumps(body), cli_version()
+
+
+def test_files_are_separate_blocks_with_their_own_cache_breakpoint(capture, tmp_path):
+    body = send(capture, tmp_path, attachments=["<file>a</file>", "<file>b</file>"])
+    *_, first, second, prompt = body["messages"][0]["content"]
+    assert [first["text"], second["text"], prompt["text"]] == ["<file>a</file>", "<file>b</file>", "Say hi"]
+    # Only the last file is marked: the cache entry ending there covers every file before it.
+    # With Claude Code's marks on the system prompt and the prompt, that's the API's limit of 4.
+    assert "cache_control" not in first
+    assert second["cache_control"]["type"] == "ephemeral", cli_version()
+    assert json.dumps(body).count('"cache_control"') <= 4, cli_version()
 
 
 def test_messages_carry_only_the_known_extras(capture, tmp_path):

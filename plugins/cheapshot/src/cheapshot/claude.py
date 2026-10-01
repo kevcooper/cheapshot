@@ -21,7 +21,11 @@ from pathlib import Path
 
 FLAGS = [
     "--print",
-    "--output-format", "json",
+    # Structured input lets files and the prompt be separate content blocks, so a file can carry
+    # its own cache breakpoint. It requires streamed output, which in turn requires --verbose.
+    "--input-format", "stream-json",
+    "--output-format", "stream-json",
+    "--verbose",
     "--no-session-persistence",
     "--safe-mode",  # no CLAUDE.md, plugins, hooks, MCP servers, skills, agents, output styles
     "--tools", "",  # no tool definitions
@@ -45,6 +49,10 @@ KEEP = {"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"}
 KEEP_PREFIXES = ("CLAUDE_CODE_USE_", "CLAUDE_CODE_SKIP_")
 
 
+def caching_enabled() -> bool:
+    return os.environ.get("CHEAPSHOT_PROMPT_CACHING") != "0"
+
+
 def child_env() -> dict[str, str]:
     env = {
         k: v
@@ -53,9 +61,24 @@ def child_env() -> dict[str, str]:
     }
     # Prompt caching stays on (1-hour breakpoints on the system prompt and the prompt) unless
     # turned off, since repeated prefixes then bill at a fraction of the input price.
-    if os.environ.get("CHEAPSHOT_PROMPT_CACHING") == "0":
+    if not caching_enabled():
         env["DISABLE_PROMPT_CACHING"] = "1"
     return env | ENV
+
+
+def message(attachments: list[str], prompt: str) -> bytes:
+    """The stdin line: one text block per attachment (rendered file), then the prompt.
+
+    Claude Code marks the system prompt and the last block (the prompt) for caching itself. A
+    mark on the last attachment as well writes a cache entry that ends at the files, so another
+    question about the same files reuses it. That makes four breakpoints, the API's maximum.
+    """
+    blocks = [{"type": "text", "text": text} for text in attachments]
+    if blocks and caching_enabled():
+        blocks[-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+    blocks.append({"type": "text", "text": prompt})
+    line = {"type": "user", "message": {"role": "user", "content": blocks}}
+    return (json.dumps(line) + "\n").encode()
 
 
 def command(
@@ -80,10 +103,12 @@ async def infer(
     effort: str | None,
     cwd: Path,
     output_schema: dict | None = None,
+    attachments: list[str] = (),
 ) -> tuple[str, str, dict]:
-    """Run one request; return (text, model that served it, the CLI's full JSON result).
+    """Run one request; return (text, model that served it, the CLI's JSON result).
 
-    With `output_schema`, text is the JSON document matching it.
+    `attachments` are text blocks placed before the prompt, such as rendered files. With
+    `output_schema`, text is the JSON document matching it.
 
     `cwd` should be an empty directory: its path appears in the environment message.
     """
@@ -98,16 +123,15 @@ async def infer(
     )
     try:
         # The prompt goes over stdin: no argv size limit, and it can't be mistaken for a flag.
-        stdout, stderr = await proc.communicate(prompt.encode())
+        stdout, stderr = await proc.communicate(message(list(attachments), prompt))
     finally:
         if proc.returncode is None:
             proc.kill()
             await proc.wait()
 
-    try:
-        result = json.loads(stdout)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"claude exited {proc.returncode}: {stderr.decode().strip()}") from None
+    result = final_result(stdout)
+    if result is None:
+        raise RuntimeError(f"claude exited {proc.returncode}: {stderr.decode().strip()}")
 
     if result.get("is_error") or proc.returncode != 0:
         detail = result.get("result") or stderr.decode().strip() or result.get("terminal_reason")
@@ -124,3 +148,15 @@ async def infer(
             raise RuntimeError("claude returned no structured output for the schema.")
         return json.dumps(result["structured_output"]), served_by, result
     return result["result"], served_by, result
+
+
+def final_result(stdout: bytes) -> dict | None:
+    """The `result` event at the end of the CLI's stream-json output, if it got that far."""
+    for line in reversed(stdout.decode(errors="replace").splitlines()):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "result":
+            return event
+    return None

@@ -87,12 +87,23 @@ class OneshotResult(BaseModel):
 
 
 async def infer(
-    model: str, prompt: str, system: str | None, effort: str | None, output_schema: dict | None
+    model: str,
+    prompt: str,
+    system: str | None,
+    effort: str | None,
+    output_schema: dict | None,
+    attachments: list[str],
 ) -> tuple[str, str, dict]:
     """Run one request through the `claude` CLI; return (text, model that served it, raw response)."""
     try:
         return await claude.infer(
-            model, prompt, system, effort, cwd=default_cache_dir() / "workdir", output_schema=output_schema
+            model,
+            prompt,
+            system,
+            effort,
+            cwd=default_cache_dir() / "workdir",
+            output_schema=output_schema,
+            attachments=attachments,
         )
     except (RuntimeError, OSError) as exc:
         # MCPServer hides the message of anything but ToolError from the model.
@@ -172,7 +183,7 @@ async def oneshot(
     if loaded:
         # Content hashes, not contents: the key follows edits, and the database stays small.
         request["files"] = [{"path": f.path, "sha256": f.sha256} for f in loaded]
-    full_prompt = file_input.render(loaded, prompt)
+    attachments = [file_input.render(f) for f in loaded]
     key = cache_key(**request)
     cache = get_cache()
 
@@ -188,12 +199,12 @@ async def oneshot(
         cache.record_hit(key)
         return result(hit.text, True, hit.model, hit.created_at)
 
-    entry, cached = await compute(key, request, full_prompt, output_schema, since)
+    entry, cached = await compute(key, request, attachments, output_schema, since)
     return result(entry.text, cached, entry.model, entry.created_at)
 
 
 async def compute(
-    key: str, request: dict, full_prompt: str, output_schema: dict | None, since: float
+    key: str, request: dict, attachments: list[str], output_schema: dict | None, since: float
 ) -> tuple[Entry, bool]:
     """Run the request once across all sessions; return (entry, whether another caller paid for it).
 
@@ -214,7 +225,12 @@ async def compute(
                     return hit, True
                 async with get_limiter():
                     text, served_by, response = await infer(
-                        request["model"], full_prompt, request["system"], request["effort"], output_schema
+                        request["model"],
+                        request["prompt"],
+                        request["system"],
+                        request["effort"],
+                        output_schema,
+                        attachments,
                     )
                 return cache.put(key, request, text, served_by, response), False
             except ToolError as exc:
