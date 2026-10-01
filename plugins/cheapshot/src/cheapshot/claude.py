@@ -35,7 +35,6 @@ ENV = {
     "CLAUDE_CODE_DISABLE_ATTACHMENTS": "1",
     "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",  # billing header block at the top of `system`
     "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",  # context_management edits, extra betas
-    "DISABLE_PROMPT_CACHING": "1",  # cache_control breakpoints
     # Not in the body: makes an unknown or unavailable model an error instead of a substitute.
     "CLAUDE_CODE_DISABLE_MODEL_ACCESS_FALLBACK": "1",
 }
@@ -52,6 +51,10 @@ def child_env() -> dict[str, str]:
         for k, v in os.environ.items()
         if not k.startswith("CLAUDE") or k in KEEP or k.startswith(KEEP_PREFIXES)
     }
+    # Prompt caching stays on (1-hour breakpoints on the system prompt and the prompt) unless
+    # turned off, since repeated prefixes then bill at a fraction of the input price.
+    if os.environ.get("CHEAPSHOT_PROMPT_CACHING") == "0":
+        env["DISABLE_PROMPT_CACHING"] = "1"
     return env | ENV
 
 

@@ -102,11 +102,23 @@ def test_no_tools_without_a_schema(capture, tmp_path):
     assert not send(capture, tmp_path).get("tools"), f"--tools '' stopped working ({cli_version()})"
 
 
-def test_no_prompt_caching_or_context_management(capture, tmp_path):
+def test_no_context_management(capture, tmp_path):
+    # CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1.
+    assert "context_management" not in send(capture, tmp_path), cli_version()
+
+
+def test_prompt_caching_is_on_by_default(capture, tmp_path):
     body = send(capture, tmp_path)
-    # DISABLE_PROMPT_CACHING=1 and CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1.
-    assert "cache_control" not in json.dumps(body), cli_version()
-    assert "context_management" not in body, cli_version()
+    # Breakpoints on the end of the system prompt and on the prompt itself.
+    assert body["system"][-1].get("cache_control", {}).get("type") == "ephemeral", cli_version()
+    prompt_block = body["messages"][0]["content"][-1]
+    assert prompt_block["text"] == "Say hi"
+    assert prompt_block.get("cache_control", {}).get("type") == "ephemeral", cli_version()
+
+
+def test_prompt_caching_can_be_turned_off(capture, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHEAPSHOT_PROMPT_CACHING", "0")  # child_env maps it to DISABLE_PROMPT_CACHING
+    assert "cache_control" not in json.dumps(send(capture, tmp_path)), cli_version()
 
 
 def test_messages_carry_only_the_known_extras(capture, tmp_path):
@@ -124,7 +136,8 @@ def test_messages_carry_only_the_known_extras(capture, tmp_path):
     # CLAUDE.md, memory, and git status.
     assert [m["role"] for m in rest] == ["system"], cli_version()
     environment = "\n".join(text_blocks(rest[0]["content"]))
-    assert environment.startswith("# Environment"), environment[:300]
+    # Wrapped in <system-reminder> tags when prompt caching is on.
+    assert environment.removeprefix("<system-reminder>\n").startswith("# Environment"), environment[:300]
     for leak in ("claudeMd", "gitStatus", "Memory"):
         assert leak not in environment, f"{leak} leaked into the request ({cli_version()})"
 

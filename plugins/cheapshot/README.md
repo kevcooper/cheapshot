@@ -57,8 +57,8 @@ when `output_schema` is set, otherwise `null`.
 ## Claude Code compatibility
 
 To keep requests close to a bare API call, `claude.py` runs the CLI with `--safe-mode`, no
-tools, and a handful of environment variables that turn off extras like reminders, prompt
-caching, and experimental betas. Those variables are undocumented Claude Code settings, found by
+tools, and a handful of environment variables that turn off extras like reminders, the
+billing header, and experimental betas. Those variables are undocumented Claude Code settings, found by
 capturing the requests the CLI sends, and were verified with Claude Code 2.1.286. A later
 version may ignore or change them; answers would keep working, but requests could carry more
 than described above. `tests/test_claude_cli.py` checks each setting against the installed
@@ -69,6 +69,10 @@ Claude Code.
 
 - Credentials: whatever the `claude` CLI on your PATH is logged in with.
 - Cache location: `$CHEAPSHOT_CACHE_DIR`, else `$CLAUDE_PLUGIN_DATA`, else `~/.cache/cheapshot`.
+- `CHEAPSHOT_PROMPT_CACHING` (default on): set to `0` to send requests without prompt caching.
+  With it on, Claude Code marks the system prompt and the prompt for 1-hour caching, so a
+  repeated prefix within the hour bills at a fraction of the input price; writing the cache
+  costs more than plain input.
 - `CHEAPSHOT_MAX_FILE_BYTES` (default 1000000): cap on the total size of `files` in one call.
 - `CHEAPSHOT_MAX_CONCURRENCY` (default 4): most `claude` processes one session's server runs at once.
   Extra calls queue.
