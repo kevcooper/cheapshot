@@ -17,14 +17,25 @@ edited file gets a fresh answer.
 
 ## Install
 
+cheapshot is listed in the [kevcooper plugin marketplace](https://github.com/kevcooper/claude-plugins).
 In Claude Code:
 
 ```
-/plugin marketplace add kevcooper/cheapshot
-/plugin install cheapshot@cheapshot
+/plugin marketplace add kevcooper/claude-plugins
+/plugin install cheapshot@kevcooper
 ```
 
 Then start a new session.
+
+If you installed an earlier version as `cheapshot@cheapshot`, that marketplace no longer
+exists in this repo and won't receive updates. Switch over with:
+
+```
+/plugin uninstall cheapshot@cheapshot
+/plugin marketplace remove cheapshot
+```
+
+then run the two install commands above.
 
 ## Documentation
 
